@@ -229,6 +229,47 @@
         .modal-actions { display: flex; gap: 10px; margin-top: 18px; }
         .modal-actions .btn { flex: 1; }
 
+        /* OSM reference layers */
+        .section-title {
+            font-size: 15px;
+            font-weight: 600;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #8e9aaf;
+            margin-top: 4px;
+        }
+
+        .section-note { font-size: 11px; color: #868e96; margin-top: -8px; line-height: 1.5; }
+
+        .osm-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            border-radius: 6px;
+            transition: background 0.2s ease;
+        }
+
+        .osm-item:hover { background: #f4f6f8; }
+
+        .osm-swatch {
+            flex: 0 0 auto;
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+            border: 1px solid rgba(0,0,0,0.15);
+        }
+
+        .osm-label { flex: 1 1 auto; font-size: 13px; cursor: pointer; }
+        .osm-count { flex: 0 0 auto; font-size: 11px; color: #adb5bd; }
+        .osm-status { font-size: 11px; color: #adb5bd; padding: 0 10px 6px 40px; }
+        .osm-status.error { color: #c0392b; }
+
+        /* When OSM data is on screen, the AMTN areas react only along their outline
+           so clicks reach the features underneath instead of being swallowed by the fill. */
+        /* Specificity must beat Leaflet's own `.leaflet-pane > svg path.leaflet-interactive`. */
+        .leaflet-overlay-pane.boundary-only > svg path.leaflet-interactive { pointer-events: stroke; }
+        .osm-status[hidden] { display: none !important; }
+
         .leaflet-container { font-family: inherit; }
         .leaflet-popup-content-wrapper { border-radius: 8px; }
         .leaflet-popup-content { margin: 12px 14px; }
@@ -267,6 +308,11 @@
                 <button class="btn btn-secondary" id="download-btn">Descarregar GeoJSON</button>
                 <button class="btn btn-ghost" id="reset-btn">Repor camadas originais</button>
             </div>
+
+            <h2 class="section-title">Dados OSM</h2>
+            <p class="section-note">Extraído do OpenStreetMap para a área do Polígono 1 (0,367 km²). Carregado apenas quando activado.</p>
+            <button class="btn btn-secondary" id="osm-zoom">Ampliar para a área OSM</button>
+            <div id="osm-layers"></div>
 
             <div class="stats">
                 <p><strong>Total de áreas:</strong> <span id="layer-count">0</span></p>
@@ -641,12 +687,211 @@
 
         function loadDefaults() { return clone(DEFAULT_DATA); }
 
+        // ---------- OSM reference layers ----------
+        // Files live in osm/ and are fetched the first time a layer is switched on,
+        // so the page stays light until the data is actually wanted.
+        var OSM_STORAGE_KEY = 'amtnOsmLayers';
+
+        var OSM_LAYERS = [
+            { key: 'edificios',        label: 'Edifícios',             color: '#8d6e63', kind: 'polygon', count: 164 },
+            { key: 'vias',             label: 'Vias rodoviárias',      color: '#ef6c00', kind: 'line',    count: 113 },
+            { key: 'pedonal_ciclavel', label: 'Pedonal e ciclável',    color: '#2e7d32', kind: 'line',    count: 70  },
+            { key: 'verde',            label: 'Espaços verdes',        color: '#66bb6a', kind: 'polygon', count: 24  },
+            { key: 'transportes',      label: 'Paragens e transportes',color: '#1565c0', kind: 'point',   count: 29  },
+            { key: 'poi',              label: 'Serviços e comércio',   color: '#8e24aa', kind: 'point',   count: 44  },
+            { key: 'arvores',          label: 'Árvores',               color: '#43a047', kind: 'point',   count: 44  },
+            { key: 'outros',           label: 'Outros elementos',      color: '#78909c', kind: 'mixed',   count: 137 }
+        ];
+
+        // Own pane below the AMTN polygons so the association's areas stay on top.
+        map.createPane('osmPane');
+        map.getPane('osmPane').style.zIndex = 380;
+
+        var osmState = {};   // key -> { layer, loading, loaded }
+
+        function loadOsmEnabled() {
+            try {
+                var raw = localStorage.getItem(OSM_STORAGE_KEY);
+                if (raw) {
+                    var arr = JSON.parse(raw);
+                    if (Array.isArray(arr)) { return arr; }
+                }
+            } catch (e) {}
+            return [];
+        }
+
+        function activeOsmKeys() {
+            return OSM_LAYERS.filter(function (d) {
+                var s = osmState[d.key];
+                return s && s.layer && map.hasLayer(s.layer);
+            }).map(function (d) { return d.key; });
+        }
+
+        function saveOsmEnabled() {
+            try { localStorage.setItem(OSM_STORAGE_KEY, JSON.stringify(activeOsmKeys())); } catch (e) {}
+            updateAmtnInteractivity();
+        }
+
+        // With OSM data showing, the large AMTN fills would intercept every click.
+        // Switch them to outline-only hit testing so the detail underneath stays reachable.
+        function updateAmtnInteractivity() {
+            var pane = map.getPane('overlayPane');
+            if (!pane) { return; }
+            if (activeOsmKeys().length > 0) {
+                pane.classList.add('boundary-only');
+            } else {
+                pane.classList.remove('boundary-only');
+            }
+        }
+
+        function osmStyle(def) {
+            if (def.kind === 'line') {
+                return { color: def.color, weight: def.key === 'pedonal_ciclavel' ? 2.5 : 2.5, opacity: 0.85, pane: 'osmPane' };
+            }
+            return {
+                color: def.color, fillColor: def.color, weight: 1,
+                opacity: 0.85, fillOpacity: 0.35, pane: 'osmPane'
+            };
+        }
+
+        var TAG_KEYS = ['amenity', 'shop', 'highway', 'building', 'leisure', 'landuse', 'natural',
+                        'public_transport', 'railway', 'operator', 'addr:street', 'addr:housenumber',
+                        'opening_hours', 'cuisine', 'website'];
+
+        function osmPopup(feature, def) {
+            var p = feature.properties || {};
+            var title = p.name || p['name:pt'] || def.label;
+            var rows = [];
+            TAG_KEYS.forEach(function (k) {
+                if (p[k] && p[k] !== title) {
+                    rows.push('<strong>' + escapeHtml(k) + ':</strong> ' + escapeHtml(p[k]));
+                }
+            });
+            if (feature.id) {
+                rows.push('<a href="https://www.openstreetmap.org/' + escapeHtml(String(feature.id)) +
+                          '" target="_blank" rel="noopener">Ver no OpenStreetMap</a>');
+            }
+            return '<h4>' + escapeHtml(title) + '</h4><p>' + (rows.join('<br>') || 'Sem etiquetas') + '</p>';
+        }
+
+        function buildOsmLayer(def, geojson) {
+            return L.geoJSON(geojson, {
+                pane: 'osmPane',
+                style: function () { return osmStyle(def); },
+                pointToLayer: function (feature, latlng) {
+                    return L.circleMarker(latlng, {
+                        pane: 'osmPane',
+                        radius: def.key === 'arvores' ? 3 : 5,
+                        color: '#ffffff', weight: 1,
+                        fillColor: def.color, fillOpacity: 0.9
+                    });
+                },
+                onEachFeature: function (feature, layer) {
+                    layer.bindPopup(osmPopup(feature, def), { maxWidth: 280 });
+                }
+            });
+        }
+
+        function toggleOsmLayer(def, on, statusEl, checkbox) {
+            var st = osmState[def.key] || (osmState[def.key] = {});
+
+            if (!on) {
+                if (st.layer) { map.removeLayer(st.layer); }
+                statusEl.hidden = true;
+                saveOsmEnabled();
+                return;
+            }
+
+            if (st.layer) { st.layer.addTo(map); saveOsmEnabled(); return; }
+            if (st.loading) { return; }
+
+            st.loading = true;
+            statusEl.hidden = false;
+            statusEl.className = 'osm-status';
+            statusEl.textContent = 'A carregar…';
+
+            fetch('osm/' + def.key + '.geojson')
+                .then(function (res) {
+                    if (!res.ok) { throw new Error('HTTP ' + res.status); }
+                    return res.json();
+                })
+                .then(function (gj) {
+                    st.loading = false;
+                    st.layer = buildOsmLayer(def, gj);
+                    if (checkbox.checked) { st.layer.addTo(map); }
+                    statusEl.hidden = true;
+                    saveOsmEnabled();
+                })
+                .catch(function (err) {
+                    st.loading = false;
+                    checkbox.checked = false;
+                    statusEl.hidden = false;
+                    statusEl.className = 'osm-status error';
+                    statusEl.textContent = 'Não foi possível carregar (' + err.message + '). Os dados OSM precisam de ser servidos por HTTP.';
+                });
+        }
+
+        function initOsmLayers() {
+            var container = document.getElementById('osm-layers');
+            var enabled = loadOsmEnabled();
+
+            OSM_LAYERS.forEach(function (def) {
+                var item = document.createElement('div');
+                item.className = 'osm-item';
+
+                var checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.className = 'toggle-checkbox';
+                checkbox.id = 'osm-' + def.key;
+
+                var swatch = document.createElement('span');
+                swatch.className = 'osm-swatch';
+                swatch.style.background = def.color;
+
+                var label = document.createElement('label');
+                label.className = 'osm-label';
+                label.setAttribute('for', checkbox.id);
+                label.textContent = def.label;
+
+                var count = document.createElement('span');
+                count.className = 'osm-count';
+                count.textContent = def.count;
+
+                var status = document.createElement('div');
+                status.className = 'osm-status';
+                status.hidden = true;
+
+                item.appendChild(checkbox);
+                item.appendChild(swatch);
+                item.appendChild(label);
+                item.appendChild(count);
+
+                checkbox.addEventListener('change', function () {
+                    toggleOsmLayer(def, checkbox.checked, status, checkbox);
+                });
+
+                container.appendChild(item);
+                container.appendChild(status);
+
+                if (enabled.indexOf(def.key) !== -1) {
+                    checkbox.checked = true;
+                    toggleOsmLayer(def, true, status, checkbox);
+                }
+            });
+        }
+
         // ---------- wiring ----------
         document.getElementById('add-layer-btn').addEventListener('click', openModal);
         document.getElementById('download-btn').addEventListener('click', downloadGeoJSON);
         document.getElementById('reset-btn').addEventListener('click', resetLayers);
         document.getElementById('modal-cancel').addEventListener('click', closeModal);
         document.getElementById('modal-save').addEventListener('click', addLayer);
+
+        // Bounding box of the polygon the OSM extract was cut to.
+        var OSM_EXTENT = L.latLngBounds([[38.76323, -9.17292], [38.77095, -9.16401]]);
+        document.getElementById('osm-zoom').addEventListener('click', function () {
+            map.fitBounds(OSM_EXTENT, { padding: [30, 30] });
+        });
 
         modal.addEventListener('click', function (e) {
             if (e.target === modal) { closeModal(); }
@@ -658,6 +903,7 @@
 
         // ---------- go ----------
         renderAll(true);
+        initOsmLayers();
 
         // Safety net: make sure Leaflet re-measures once layout settles.
         window.addEventListener('load', function () { map.invalidateSize(); fitAll(); });

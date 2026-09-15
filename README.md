@@ -24,10 +24,20 @@ Apenas um navegador web moderno (Chrome, Firefox, Safari, Edge).
 
 ```
 AMTN/
-├── index.html          # Página principal do mapa
-├── area_layers.geojson # Dados geográficos em formato GeoJSON
-├── README.md           # Este ficheiro
-└── .gitignore          # Ficheiros ignorados pelo Git
+├── index.html            # Página principal do mapa
+├── area_layers.geojson   # Áreas de influência da AMTN (2 polígonos)
+├── telheiras_norte.osm   # Extracto OSM em bruto da área do Polígono 1
+├── osm/                  # O mesmo extracto dividido por tema (GeoJSON)
+│   ├── edificios.geojson
+│   ├── vias.geojson
+│   ├── pedonal_ciclavel.geojson
+│   ├── verde.geojson
+│   ├── transportes.geojson
+│   ├── poi.geojson
+│   ├── arvores.geojson
+│   └── outros.geojson
+├── README.md             # Este ficheiro
+└── .gitignore            # Ficheiros ignorados pelo Git
 ```
 
 ## 🛠️ Tecnologias Utilizadas
@@ -47,6 +57,25 @@ Contém dois polígonos representando as áreas de influência:
 - **Polígono 2**: Zona sul/central
 
 Coordenadas: Lisboa, Portugal (~38.76°N, 9.17°W)
+
+### Extracto OpenStreetMap: `telheiras_norte.osm`
+
+Extracto completo do OpenStreetMap recortado pela área do **Polígono 1** (0,367 km²),
+obtido através da Overpass API. Contém 410 *ways*, 2130 *nodes* e 625 elementos com
+etiquetas, em XML OSM com metadados — abre directamente no JOSM e no QGIS.
+
+As geometrias que atravessam o limite do polígono (ruas, uma linha eléctrica) são
+mantidas na íntegra, para não partir a topologia. As relações de percurso
+(carreiras de autocarro, itinerários rodoviários) **não** são expandidas: várias
+delas atravessam o país inteiro e arrastariam consigo meio Portugal.
+
+### Camadas temáticas: `osm/`
+
+O mesmo extracto convertido para GeoJSON e dividido por tema, para poder ser
+carregado e alternado no mapa. Cada camada é descarregada apenas quando é activada,
+para manter o arranque da página rápido (~297 KB no total).
+
+Para actualizar os dados, repetir a consulta Overpass e voltar a dividir por tema.
 
 ## 🎨 Personalização
 
